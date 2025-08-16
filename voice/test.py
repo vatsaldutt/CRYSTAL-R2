@@ -1,0 +1,117 @@
+#
+# Copyright (c) 2024–2025, Daily
+#
+# SPDX-License-Identifier: BSD 2-Clause License
+#
+
+
+import os
+
+from dotenv import load_dotenv
+from loguru import logger
+
+from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.pipeline.pipeline import Pipeline
+from pipecat.pipeline.runner import PipelineRunner
+from pipecat.pipeline.task import PipelineParams, PipelineTask
+from pipecat.runner.types import RunnerArguments
+from pipecat.runner.utils import create_transport
+from pipecat.services.ultravox.stt import UltravoxSTTService
+from my_tts_service import MyTTSServerService
+from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.transports.network.fastapi_websocket import FastAPIWebsocketParams
+from pipecat.transports.services.daily import DailyParams
+
+load_dotenv(override=True)
+
+ultravox_processor = None
+
+# NOTE: This example requires GPU resources to run efficiently.
+# The Ultravox model is compute-intensive and performs best with GPU acceleration.
+# This can be deployed on cloud GPU providers like Cerebrium.ai for optimal performance.
+
+
+# Want to initialize the ultravox processor since it takes time to load the model and dont
+# want to load it every time the pipeline is run
+
+
+# We store functions so objects (e.g. SileroVADAnalyzer) don't get
+# instantiated. The function will be called when the desired transport gets
+# selected.
+transport_params = {
+    "daily": lambda: DailyParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(),
+    ),
+    "twilio": lambda: FastAPIWebsocketParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(),
+    ),
+    "webrtc": lambda: TransportParams(
+        audio_in_enabled=True,
+        audio_out_enabled=True,
+        vad_analyzer=SileroVADAnalyzer(),
+    ),
+}
+
+
+async def run_bot(transport: BaseTransport, runner_args: RunnerArguments):
+    global ultravox_processor
+    if ultravox_processor is None:
+        ultravox_processor = UltravoxSTTService(
+            model_name="fixie-ai/ultravox-v0_5-llama-3_1-8b",
+            hf_token=os.getenv("HF_TOKEN"),
+        )
+
+    logger.info("Starting bot")
+
+    # Replace Cartesia with your service
+    tts = MyTTSServerService(
+        base_url="https://localhost:8000/tts",  # whatever your server_m1.py exposes
+        sample_rate=24000,
+    )
+
+    pipeline = Pipeline(
+        [
+            transport.input(),
+            ultravox_processor,  # STT
+            tts,  # <-- your custom TTS
+            transport.output(),
+        ]
+    )
+
+    task = PipelineTask(
+        pipeline,
+        params=PipelineParams(
+            enable_metrics=True,
+            enable_usage_metrics=True,
+        ),
+        idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
+    )
+
+    @transport.event_handler("on_client_connected")
+    async def on_client_connected(transport, client):
+        logger.info(f"Client connected")
+
+    @transport.event_handler("on_client_disconnected")
+    async def on_client_disconnected(transport, client):
+        logger.info(f"Client disconnected")
+        await task.cancel()
+
+    runner = PipelineRunner(handle_sigint=runner_args.handle_sigint)
+
+    await runner.run(task)
+
+
+async def bot(runner_args: RunnerArguments):
+    """Main bot entry point compatible with Pipecat Cloud."""
+    transport = await create_transport(runner_args, transport_params)
+    await run_bot(transport, runner_args)
+
+
+if __name__ == "__main__":
+    from pipecat.runner.run import main
+
+    main()
