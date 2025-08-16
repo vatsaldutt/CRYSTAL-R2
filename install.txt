@@ -1,0 +1,4 @@
+pip install "pipecat-ai[mlx-whisper]"
+pip install "pipecat-ai[livekit,whisper,cartesia]"
+pip install livekit livekit-api
+pip install vllm
