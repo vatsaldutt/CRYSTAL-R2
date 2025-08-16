@@ -4,9 +4,9 @@ import threading
 import json
 import os
 import numpy as np
-from typing import Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.responses import Response
 import uvicorn
 
 # Optional ngrok
@@ -87,6 +87,26 @@ def interleave_channels(arr: np.ndarray) -> np.ndarray:
         arr = np.expand_dims(arr, 0)
     return arr.T.reshape(-1)
 
+# ----------------- New REST endpoint -----------------
+@app.post("/tts")
+async def synthesize(payload: dict):
+    """Synchronous text-to-speech generation (one-shot)."""
+    text = payload.get("text", "")
+    if not text:
+        return Response(content=b"", status_code=400)
+
+    sr = getattr(model, "sr", 48000)
+
+    # Generate full audio at once
+    audio, _ = model.speak(text, audio_prompt_path=AUDIO_PROMPT_PATH)
+    processed = process_chunk_ai_voice(audio, sr)
+
+    # Convert float32 [-1,1] → int16 PCM
+    pcm16 = (processed.squeeze() * 32767).astype("int16").tobytes()
+
+    return Response(content=pcm16, media_type="application/octet-stream")
+
+# ----------------- Existing WebSocket endpoint -----------------
 @app.websocket("/ws/tts")
 async def websocket_tts(websocket: WebSocket):
     await websocket.accept()
@@ -201,6 +221,7 @@ async def websocket_tts(websocket: WebSocket):
         except Exception:
             pass
 
+# ----------------- Entrypoint -----------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     
@@ -211,7 +232,8 @@ if __name__ == "__main__":
         public_url = ngrok.connect(port, "http").public_url
         print("ngrok:", public_url)
         print("WebSocket:", public_url.replace("http", "ws") + "/ws/tts")
+        print("REST:", public_url + "/tts")
     except Exception as e:
         print("ngrok failed:", e)
 
-    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
+    uvicorn.run("server_m1:app", host="0.0.0.0", port=port, log_level="info")
