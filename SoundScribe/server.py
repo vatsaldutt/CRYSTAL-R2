@@ -1,4 +1,5 @@
 # server_m1.py
+
 import asyncio
 import threading
 import json
@@ -24,6 +25,9 @@ from pedalboard import (
     Pedalboard, Reverb, HighpassFilter, LowShelfFilter, HighShelfFilter,
     Compressor, Chorus, Delay, PitchShift, Distortion
 )
+
+# Control ngrok usage
+USE_NGROK = False  # Set to False to disable ngrok and run local server only
 
 # ----------------- VOICE PROMPT -----------------
 AUDIO_PROMPT_PATH = os.environ.get(
@@ -223,17 +227,23 @@ async def websocket_tts(websocket: WebSocket):
 
 # ----------------- Entrypoint -----------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 8000))
-    
-    token = "31LQ560NMk4H7mf8UMRaDoxGygl_3hZPhHQ7BChHVaMXvh5Fz"
-    if token:
-        ngrok_conf.get_default().auth_token = token
-    try:
-        public_url = ngrok.connect(port, "http").public_url
-        print("ngrok:", public_url)
-        print("WebSocket:", public_url.replace("http", "ws") + "/ws/tts")
-        print("REST:", public_url + "/tts")
-    except Exception as e:
-        print("ngrok failed:", e)
 
-    uvicorn.run("server_m1:app", host="0.0.0.0", port=port, log_level="info")
+    port = int(os.environ.get("PORT", 8000))
+
+    if USE_NGROK and PYNGROK_AVAILABLE:
+        token = "31LQ560NMk4H7mf8UMRaDoxGygl_3hZPhHQ7BChHVaMXvh5Fz"
+        if token:
+            ngrok_conf.get_default().auth_token = token
+        try:
+            public_url = ngrok.connect(port, "http").public_url
+            print("ngrok:", public_url)
+            print("WebSocket:", public_url.replace("http", "ws") + "/ws/tts")
+            print("REST:", public_url + "/tts")
+        except Exception as e:
+            print("ngrok failed:", e)
+    else:
+        print(f"Local server running at http://localhost:{port}")
+        print(f"WebSocket: ws://localhost:{port}/ws/tts")
+        print(f"REST: http://localhost:{port}/tts")
+
+    uvicorn.run("server:app", host="0.0.0.0", port=port, log_level="info")
